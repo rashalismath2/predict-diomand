@@ -1,7 +1,6 @@
 from flask import Flask
 from flask_restful import Resource, Api, reqparse
 import werkzeug
-import cv2
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.preprocessing import image
