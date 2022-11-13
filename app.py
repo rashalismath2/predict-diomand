@@ -8,6 +8,8 @@ import tempfile
 import os
 import matplotlib.pyplot as plt
 import seaborn as sn
+import math
+
 
 import cv2
 from random import randint
@@ -48,6 +50,93 @@ def crop_images(Imgs):
 
     return CroppedImages
 
+
+
+def region_of_interest(img, vertices):
+    mask = np.zeros_like(img)
+    # channel_count = image.shape[2] # channel count
+    match_mask_color = 255
+    cv2.fillPoly(mask, vertices, match_mask_color)
+    masked_image = cv2.bitwise_and(img, mask)
+    return masked_image
+
+
+def draw_lines(img, lines):
+    img = np.copy(img)
+    blank_image = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            cv2.line(img, (x1, y1), (x2, y2), (0, 0, 255), thickness=43)
+
+        out = cv2.addWeighted(img, 0.8, blank_image, 1, 1)
+        return out
+
+
+def gradient(pt1, pt2):
+    return (pt2[1] - pt1[1]) / (pt2[0] - pt1[0])
+
+
+def snells_Law(degree):
+    sin1 = abs(math.sin(math.radians(52))) # manually detected from the device
+    sin2 = abs(math.sin(math.radians(degree)))
+    index = abs(sin1 / sin2)
+    index = round(index, 3)
+    return index
+
+
+def getAngle(pointsList):
+    pt1, pt2, pt3 = pointsList[-3:]
+    m1 = abs(gradient(pt1, pt2))
+    m2 = abs(gradient(pt1, pt3))
+    angRadiance = math.atan((m2 - m1) / (1 + (m2 * m1)))
+    angDegree = abs(round(math.degrees(angRadiance)))
+    print("degree: ", angDegree)
+    index = snells_Law(angDegree)
+    return index
+
+
+def get_refractive_index_using_image(image):
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    # axis, last 0 is y axis
+    image = cv2.rectangle(image, (0, 2350), (3050, 0), 0, -2)
+
+    _, mask = cv2.threshold(image, 190, 255, cv2.THRESH_BINARY_INV)  # Threshold
+
+    kernel = np.ones((5, 4), np.uint8)  # first is for down and 2nd is for side
+
+    erosion = cv2.erode(mask, kernel, iterations=1)  # 9
+
+    element = cv2.getStructuringElement(cv2.MORPH_CROSS, (6, 6))
+
+    skeleton = cv2.subtract(image, erosion)
+    gray = cv2.cvtColor(skeleton, cv2.COLOR_BGR2GRAY)
+
+    minLineLength = 5
+    maxLineGap = 30
+
+    pointsList = []
+
+    lines = cv2.HoughLinesP(gray, 1, np.pi / 360, 95, minLineLength=minLineLength, maxLineGap=maxLineGap)
+    for line in lines:
+        for x1, y1, x2, y2 in line:
+            cv2.line(image, (x1, y1), (x2, y2), (255, 255, 255), 2)  # draw line
+            pointsList.append([x1, y1])  # collect points
+
+    if len(pointsList) > 1:
+        r_index = getAngle(pointsList)
+        print(r_index)
+        return r_index
+    else:
+        -1
+
+
+
+
+
+
+
 app = Flask(__name__)
 api = Api(app)
 
@@ -58,6 +147,20 @@ parser.add_argument('file',
                     required=True,
                     help='provide a file')
 
+
+class GetIndex(Resource):
+    def post(self):
+        args = parser.parse_args()
+        # read like a stream
+        stream = args['file']
+        ofile, ofname = tempfile.mkstemp()
+        stream.save(ofname)
+        img =cv2.imread(ofname) 
+        refrectiveIndex=get_refractive_index_using_image(img)
+
+        return {
+            "refrectiveIndex":refrectiveIndex
+        }
 
 class SaveImage(Resource):
 
@@ -93,6 +196,7 @@ class SaveImage(Resource):
 
         predicted_color = '{}'.format(CLASSES[pred_class])
 
+
         # cutshape
         val = model.predict(images)[0]
         val = np.argmax(val,axis=0)
@@ -114,6 +218,7 @@ class SaveImage(Resource):
         }
 
 api.add_resource(SaveImage, '/predict')
+api.add_resource(GetIndex, '/index')
 
 if __name__ == '__main__':
     app.run(debug=True)
